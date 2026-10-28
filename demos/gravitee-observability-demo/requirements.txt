@@ -1,0 +1,6 @@
+# Pinned: the log API (opentelemetry.sdk._logs) is still marked experimental and
+# its signatures move between releases.
+opentelemetry-api==1.45.0
+opentelemetry-sdk==1.45.0
+opentelemetry-exporter-otlp-proto-grpc==1.45.0
+opentelemetry-exporter-otlp-proto-http==1.45.0

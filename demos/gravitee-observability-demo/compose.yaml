@@ -1,0 +1,8 @@
+services:
+  gravitee-sim:
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    stop_grace_period: 30s
+    init: true
