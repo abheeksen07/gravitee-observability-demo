@@ -26,33 +26,75 @@ class CaptureMetrics:
 class ModelTests(unittest.TestCase):
     def test_complete_episode_and_continued_healthy_traffic(self):
         scenario=Scenario(0,launch_id='a'*32);traffic=Traffic(scenario)
-        failures=0; phases=Counter(); events=[];timeline=Timeline(scenario)
+        failures=0; phases=Counter(); events=[];timeline=Timeline(scenario); generated=0; active=0
         for second in range(3601):
             events.extend(timeline.due(second))
-            for i in range(300):
-                req=traffic.request(second+(i+1)/301)
+            count=scenario.arrivals(second)
+            for i in range(count):
+                req=traffic.request(second+(i+1)/(count+1))
+                generated+=1;active+=req.attrs['scenario.phase']=='cpu-throttling'
                 phases[req.attrs['scenario.phase']]+=1
                 failures+=req.status>=500
                 if req.status>=500:
                     self.assertFalse(any(s.service==C.BACKEND for s in req.stages))
-                    self.assertAlmostEqual(req.duration,5.)
+                    self.assertGreaterEqual(req.duration,4.5-1e-6)
+                    self.assertLessEqual(req.duration,5.5+1e-6)
                 if second>=1440:
                     self.assertLess(req.duration,1)
                     self.assertLess(req.status,500)
-        self.assertEqual(failures,72000)
+        self.assertGreater(failures/active,.19)
+        self.assertLess(failures/active,.21)
+        self.assertGreater(failures,69000)
+        self.assertLess(failures,75000)
         self.assertEqual(len(events),10)
-        self.assertEqual(phases['cpu-throttling'],360000)
+        self.assertGreater(phases['cpu-throttling'],350000)
         self.assertEqual(scenario.context(3600)['build_version'],scenario.previous)
         replay=Scenario(0,repeat=True)
         self.assertTrue(replay.incident(1980)); self.assertFalse(scenario.incident(1980))
+    def test_staggered_release_and_rollback_restore_each_pod(self):
+        scenario=Scenario(0,launch_id='d'*32)
+        a,b=C.SERVICE+'-0',C.SERVICE+'-1'
+        for now,states in ((179,(False,False)),(180,(True,False)),(210,(True,True)),
+                           (1380,(False,True)),(1410,(False,False)),(3600,(False,False))):
+            self.assertEqual(tuple(scenario.incident(now,p) for p in (a,b)),states)
+            for pod,regressed in zip((a,b),states):
+                context=scenario.context(now,pod)
+                self.assertEqual(context['service.version'],scenario.version if regressed else scenario.previous)
+        self.assertEqual(scenario.context(210,b)['deployment.pod.timestamp'],'1970-01-01T00:03:30+00:00')
+        self.assertEqual(scenario.context(1410,b)['deployment.change_type'],'rollback')
+        self.assertEqual(scenario.pressure(1440,b),0)
+        self.assertEqual(scenario.pressure(3600,a),0)
+
+    def test_variance_does_not_add_a_load_surge_or_dependency_failures(self):
+        scenario=Scenario(0); traffic=Traffic(scenario)
+        arrivals=[scenario.arrivals(t) for t in range(3600)]
+        self.assertGreater(max(arrivals)-min(arrivals),10)
+        self.assertTrue(all(291<=n<=309 for n in arrivals))
+        means=[sum(arrivals[a:b])/(b-a) for a,b in ((0,180),(210,1380),(1440,3600))]
+        self.assertLess(max(means)-min(means),3)
+        requests=[traffic.request(300+i/300) for i in range(6000)]
+        deadlines={round(r.duration,2) for r in requests if r.status>=500}
+        self.assertGreater(len(deadlines),30)
+        for r in requests:
+            for stage in r.stages:
+                if stage.service in (C.REDIS,C.BACKEND):
+                    self.assertEqual(stage.status,200)
+                    self.assertLess(stage.end-stage.start,.05)
+        baseline=[traffic.request(1500+i/300) for i in range(3000)]
+        averages={route:sum(r.duration for r in baseline if r.route==route)/sum(r.route==route for r in baseline) for route in C.ROUTES}
+        self.assertLess(averages[C.ROUTES[0]],averages[C.ROUTES[2]])
+        self.assertLess(averages[C.ROUTES[2]],averages[C.ROUTES[1]])
+
     def test_launch_context_and_metadata(self):
         a,b=Scenario(100),Scenario(100)
         self.assertNotEqual(a.version,b.version)
         first=Traffic(Scenario(0))
-        for _ in range(5): request=first.request(180.01)
+        for _ in range(100):
+            request=first.request(180.01)
+            if request.status==504: break
         self.assertEqual(request.status,504)
         self.assertGreaterEqual(request.start,180)
-        self.assertGreaterEqual(request.end,185)
+        self.assertGreaterEqual(request.end,184.5)
         self.assertEqual(a.context(1000)['build_version'],a.version)
         self.assertEqual(a.context(1480)['build_version'],a.previous)
         for svc in C.SERVICES:
@@ -71,6 +113,8 @@ class ModelTests(unittest.TestCase):
         by={e['type']:e for e in events}
         self.assertEqual(by['deployment']['labels']['new_version'],scenario.version)
         self.assertEqual(by['rollback']['labels']['new_version'],scenario.previous)
+        self.assertEqual(by['baseline']['labels']['business_impact'],'none')
+        self.assertEqual(by['recovery']['labels']['business_impact'],'none')
         self.assertEqual(by['deployment']['payload_object']['deployment.timestamp'],'1970-01-01T00:04:40+00:00')
         for event in events:
             self.assertIn(event['category'],('annotations','deploys'))
@@ -169,6 +213,21 @@ class PipelineTests(unittest.TestCase):
         self.assertTrue(all(.005 in p.explicit_bounds for p in self.metrics.points('jvm_gc_pause_seconds')))
         self.assertTrue(all(p.value==1 for p in self.metrics.points('gravitee_backend_probe_success')))
         self.assertTrue(all(abs(p.sum/p.count-.002)<1e-8 for p in self.metrics.points('redis_command_duration_seconds')))
+    def test_per_pod_cpu_release_rollback_and_normal_final_state(self):
+        times=(180,210,1380,1410,1440,1800,3600)
+        for now in times: self.p.tick(now,self.scenario)
+        for pod in (C.SERVICE+'-0',C.SERVICE+'-1'):
+            limits=[p.value for p in self.metrics.points('container_spec_cpu_quota_cores') if p.attributes['instance']==pod]
+            self.assertEqual(limits,[.25,.25,2,2,2,2,2] if pod.endswith('-0') else [2,.25,.25,2,2,2,2])
+            throttled=[p.value for p in self.metrics.points('container_cpu_cfs_throttled_periods_total') if p.attributes['instance']==pod]
+            self.assertEqual(throttled[-3:],[throttled[-3]]*3)
+        self.assertTrue(all(p.value==1 for p in self.metrics.points('gravitee_synthetic_check_success')))
+        events={e['type']:e for e in Timeline(self.scenario).due(3600)}
+        self.assertIn('code release',events['deployment']['labels']['change_summary'])
+        self.assertEqual(events['rollback']['labels']['previous_version'],self.scenario.version)
+        self.assertEqual(events['rollback']['labels']['new_version'],self.scenario.previous)
+        self.assertIn('previous gateway release',events['recovery']['labels']['change_summary'])
+
     def test_offline_pipeline_cannot_connect_and_safe_cli(self):
         with patch.object(socket.socket,'connect',side_effect=AssertionError('network forbidden')):
             result=run(duration=2,fast=True)

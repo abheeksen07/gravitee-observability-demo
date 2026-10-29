@@ -6,7 +6,7 @@ a view/discovery rule for `application="gravitee-api-platform"`, grouping by
 `gravitee-api-gateway` as `$service`. All eleven services emit `demo_service_info`;
 managed dependencies are discovery-only until their actual request paths are known.
 
-Stable labels: `demo="gravitee-api-platform"`, `demo_build="gravitee-cpu-throttling-v1"`, `service`, `service_name`, `lens_service`, `service_role`,
+Stable labels: `demo="gravitee-api-platform"`, `demo_build="gravitee-release-rollback-v2"`, `service`, `service_name`, `lens_service`, `service_role`,
 `application`, `team`, `environment="prod-us"`, `instance`, and
 `az="us-placement-unvalidated"`. The last is an explicit unvalidated grouping
 value, not a claim about an Azure zone. Gateway instances are
@@ -23,7 +23,7 @@ count by (lens_service, service, service_name) (demo_service_info{application="g
 ## Export cadence and compute
 
 Every signal family with data is exported once per second. Traffic is generated
-at 300 attempts/second. A chart's rate lookback is different from export cadence
+near 300 attempts/second (291–309), independently of release state. A chart's rate lookback is different from export cadence
 and graph evaluation step. Use a **10–30-second lookback** and roughly one-second
 evaluation step for detailed charts, with a short visible time range. `[1s]` often
 contains fewer than two points and cannot reliably compute `rate()`. Longer
@@ -156,3 +156,21 @@ mode, exporter errors and destination connectivity/authentication. Then check
 recent time windows, label promotion/relabeling, native histogram support, and
 service discovery rules. None of these tenant outcomes is established by local
 offline tests. Do not assume UI event-category names are accepted by ingestion.
+
+## Release rollout and restored steady state
+
+The generated gateway code release includes its deployment resource configuration.
+Pod 0 receives it at 03:00 and pod 1 at 03:30. Per-pod CPU-limit/throttling charts
+should step at different times, while request throughput only varies slightly.
+Use `build_version` on HTTP counters and `service.version` in traces/logs to
+correlate each pod's requests with its active release. `deployment.id` is shared
+for the rollout; `deployment.pod.timestamp` records each pod's change time.
+
+Rollback starts at 23:00 on pod 0 and 23:30 on pod 1, restoring the previous
+release and 2-core limits. Newly arriving requests use that pod's restored
+release context; already in-flight requests retain their original context until
+completion. At 24:00 both pods are healthy, and that normal state persists past
+the 30-minute episode without another deployment. Counter values do not reset:
+error/throttling **rates** return to zero, while cumulative totals remain.
+Synthetic check success follows completed request failures in each interval.
+Source release/rollback observations are generated, with no invented CI run URLs.

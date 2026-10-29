@@ -22,6 +22,6 @@ METRIC_EXPORT_INTERVAL_SECONDS = 1
 EXPORT_LENS_SPAN_METRICS = os.getenv('GRAVITEE_EXPORT_SPAN_METRICS', 'true').lower() == 'true'
 INCIDENT_REPEAT = os.getenv('GRAVITEE_REPEAT_INCIDENT', 'false').lower() == 'true'
 ROUTES = ('GET /catalog/v1/products/{id}', 'POST /orders/v1/submissions', 'GET /accounts/v1/entitlements')
-PROFILES = ('API product routing and policy configuration', 'Partner API access and entitlement policies', 'Order submission API resource configuration')
+PROFILES = ('API product routing release with bundled gateway resource settings', 'Partner API policy release with bundled gateway resource settings', 'Order submission routing release with bundled gateway resource settings')
 SOURCE_REPOSITORY = 'https://github.com/abheeksen07/gravitee-observability-demo'
 SOURCE_REFERENCE = os.getenv('GRAVITEE_SOURCE_REF', 'work')

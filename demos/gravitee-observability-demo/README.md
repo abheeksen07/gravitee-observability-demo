@@ -2,13 +2,16 @@
 
 This simulator generates metrics, traces, logs and change observations for a
 Gravitee API platform incident. It sends no actual API requests to customer systems.
-A deployment changes gateway container CPU limits from **2 cores to 250m** in one
+A generated gateway code release bundles a deployment resource change from
+**2 cores to 250m** in one
 illustrative US production AKS environment. Containers throttle despite available
 node CPU; gateway queues delay callers and cause HTTP 504s. Backend services stay
 healthy. Restoring CPU limits and gradually rolling gateways restores service.
 
-At 300 request attempts/second, exactly 20% fail for 20 minutes: **72,000 failed
-attempts**. These are not unique affected transactions. Routes model product
+Traffic varies between **291 and 309 request attempts/second**, without a
+release-triggered load surge. Approximately 20% of requests reaching each regressed
+pod time out during its 20-minute regression: roughly **72,000 failed attempts**
+across the rolling incident, with the actual count varying by request outcomes. These are not unique affected transactions. Routes model product
 lookup, order submission and account entitlements; actual customer workflows,
 region, workload placement and deployment mechanism require validation.
 
@@ -52,15 +55,17 @@ directly for exploration; it installs none of those collectors or integrations.
 | Launch offset | Observation |
 | --- | --- |
 | 00:00 | Healthy baseline, 2-core limit |
-| 03:00 | Resource deployment sets 250m CPU limit; throttling starts |
+| 03:00 | Gateway release rollout starts on pod 0; bundled configuration sets 250m CPU limit |
+| 03:30 | Pod 1 receives the same release and limit; both pods now throttle |
 | 03:45 | API latency and timeouts observed |
 | 04:30 | Customer backend hypothesis; healthy probes contradict it |
 | 05:00 | Nodes have CPU capacity; pods ready; no node-capacity incident |
 | 06:00 | Stable Redis and normal GC pauses eliminate those hypotheses |
 | 10:00 | Diagnosis correlates quota change, CFS throttling and gateway queue waits |
-| 22:00 | Restore CPU limit and gradual-roll mitigation selected |
-| 23:00 | Rollback restores 2 cores; queue/throttling drain over 60 seconds |
-| 24:00 | Recovery observed; API latency, errors and synthetic checks normal |
+| 22:00 | Rollback of the gateway release and bundled resource configuration selected |
+| 23:00 | Pod 0 rolls back to the previous gateway release and 2-core limits |
+| 23:30 | Pod 1 rolls back; outstanding requests and residual queues drain |
+| 24:00 | Both pods run the previous release; CPU limits, latency, errors and checks normal |
 | 30:00 onward | Healthy traffic continues indefinitely; no automatic redeployment |
 
 One incident occurs per launch. `GRAVITEE_REPEAT_INCIDENT=true` explicitly opts
@@ -69,15 +74,27 @@ restart to maintain healthy traffic. Historical telemetry is never rewritten, an
 AI SRE may correctly identify recurring patterns in historical or replay data.
 Each launch chooses a workflow description and generates a UTC/random release ID;
 all signals share release, workflow, deployment IDs and timestamps. Gateway version
-changes at deployment/rollback; dependency versions remain stable.
+changes independently on each pod as it receives the release or rollback; dependency
+versions remain stable. Each rollout shares one deployment ID, with per-pod
+`deployment.pod.timestamp` values exposing the 30-second stagger.
+
+The release is generated, including its code-change context; it is not a claim that
+a real GitHub commit, CI run or production code deployment occurred. Its bundled
+resource configuration is the actual simulated cause. Rolling back **the release**
+restores both the previous code revision identity and its 2-core CPU settings.
+No specific code defect or network outage is invented.
 
 The traffic model chooses each request's status and exact stage timings once.
+Route selection, route-specific healthy backend latency, queue residence and
+4.5–5.5-second deadlines vary using an independent seeded request generator.
+Arrival-rate waves are independent of the release state. Initial connectivity
+suspicions refer to caller-observed timeouts, not fabricated transport failures.
 Metrics count all requests regardless of sampling; traces and logs reuse those
 outcomes. Deadline errors have queue, Redis, policy and rejection stages; **no
 backend request** ran for them. Successful requests include a short successful
 backend call. Queue-wait and nested CFS-wait spans explain latency without adding
 extra time. No database failures, retries or network faults are injected.
-Requests enter at 300 arrivals/second; a bounded completion heap emits signals
+Requests enter near 300 arrivals/second; a bounded completion heap emits signals
 only when each request actually completes on the simulated clock. Incident queue
 waits cannot precede deployment. Finite runs drain pending requests before exit;
 SIGTERM flushes completed telemetry and reports any unfinished modeled requests.
@@ -88,7 +105,9 @@ with at most five seconds of initial burst. Every failed and every >=1-second
 request gets all stage logs and caller/gateway response logs, even when unsampled.
 Sampled logs carry matching trace/span IDs; unsampled logs have no fabricated IDs.
 Incident and draining health logs run every second; baseline/recovered health logs
-run every 30 seconds. Metrics export every second throughout.
+run every 30 seconds. Metrics export every second throughout. The check-success gauge is derived from
+completed request outcomes in each interval, so in-flight deadline errors remain
+visible during rollback rather than disappearing solely because a phase changed.
 
 ## Prerequisites and connectivity
 
@@ -158,7 +177,7 @@ python3.12 -m venv .venv
 .venv/bin/python -u -m sim.main --fast --duration 1860
 ```
 
-Tests exercise the full 60-minute model, exact failure counts, single launch and
+Tests exercise the full 60-minute model, bounded failure-rate/count checks, staggered pod release/rollback, single launch and
 explicit replay, dependency boundaries, HTTP outcomes, full-population native and
 classic histograms, protobuf encoding, parent/child timings, IDs/log correlation,
 verbose unsampled logs, counter/gauge semantics, events and one-second exports.
@@ -250,15 +269,15 @@ cd /path/to/gravitee-observability-demo
 git status --short --branch
 git diff --check
 git add README.md .gitignore demos/gravitee-observability-demo
-git commit -m "Add Gravitee API Gateway throttling observability stream"
+git commit -m "Model gateway release rollback and controlled request variance"
 git push -u origin work
-# Once a main branch exists, create a review PR (do not merge):
-gh pr create --base main --head work --title "Add Gravitee observability stream" --body-file demos/gravitee-observability-demo/docs/pull-request.md
+# Optional review PR:
+gh pr create --base main --head work --title "Model Gravitee release rollback and traffic variance" --body-file demos/gravitee-observability-demo/docs/pull-request.md
 ```
 
-The target was initially empty with no `main`; this delivery uses its existing
-`work` branch and does not create or merge `main`. A PR against missing `main`
-cannot be opened. The supplied PR body can be edited before invoking that example. Never reset local work to work around a push failure.
+Both `work` and `main` now exist. Work and validate on `work`, then use a PR
+for review. When explicitly authorized to fast-forward `main` after validation,
+use `git push origin work:main` without force-pushing. The supplied PR body can be edited before invoking that example. Never reset local work to work around a push failure.
 
 ## Reference and limitations
 

@@ -50,7 +50,7 @@ class Telemetry:
                     'gc':hist('jvm_gc_pause_seconds'), 'redis':hist('redis_command_duration_seconds'),
                     'probe':gauge('gravitee_backend_probe_success'), 'ready':gauge('kube_pod_status_ready'),
                     'node':gauge('gravitee_node_cpu_available_cores'),
-                    'synthetic':gauge('gravitee_synthetic_check_success'),'queue_seconds':0.,
+                    'synthetic':gauge('gravitee_synthetic_check_success'),'queue_seconds':0.,'interval_failures':0,
                     'failed':counter('gravitee_failed_request_attempts_total')}
     def service(self, svc, instance=None): return self.services[(svc,instance or svc+'-0')]
     def log(self, svc, now, body, attrs, instance=None, span=None):
@@ -77,7 +77,8 @@ class Telemetry:
             m['span'].record(name,duration,status>=500,kind)
         gateway['read'].add(512,{**gateway['labels'],'device':'overlay'}); gateway['write'].add(1024,{**gateway['labels'],'device':'overlay'})
         gateway['queue_seconds']+=req.stages[0].end-req.stages[0].start
-        if req.status>=500: gateway['failed'].add(1,gateway['labels'])
+        if req.status>=500:
+            gateway['failed'].add(1,gateway['labels']);gateway['interval_failures']+=1
         root=server=None; children=[]
         if sampled:
             root=client['tracer'].start_span(req.route,kind=trace.SpanKind.CLIENT,start_time=int(req.start*1e9),attributes=req.attrs)
@@ -125,10 +126,10 @@ class Telemetry:
             attrs.update({'db.system.name':'redis','db.operation.name':'EVAL','dependency.outcome':'success'})
         return attrs
     def tick(self, now, scenario):
-        incident=scenario.incident(now)
-        pressure=scenario.pressure(now)
         for (svc,inst),m in self.services.items():
             labels=m['labels']; gateway=svc==C.SERVICE
+            incident=gateway and scenario.incident(now,inst)
+            pressure=scenario.pressure(now,inst) if gateway else max(scenario.pressure(now,C.SERVICE+'-0'),scenario.pressure(now,C.SERVICE+'-1'))
             m['info'].set(1,labels)
             if svc in C.AKS_SERVICES or svc in (C.CLIENT,C.BACKEND):
                 m['cpu'].add(.245 if gateway and incident else .6 if gateway else .08,labels)
@@ -137,19 +138,19 @@ class Telemetry:
             if svc in C.AKS_SERVICES: m['ready'].set(1,labels)
             if gateway:
                 m['limit'].set(.25 if incident else 2,labels)
-                m['periods'].add(10,labels);m['throttled'].add(8*pressure if pressure else 0,labels)
-                m['throttle_time'].add(.75*pressure if pressure else 0,labels)
+                m['periods'].add(10,labels);m['throttled'].add(8 if incident else 0,labels)
+                m['throttle_time'].add(.75 if incident else 0,labels)
                 m['queue'].set(m['queue_seconds'],labels);m['queue_seconds']=0.
                 m['node'].set(6.5,labels);m['gc'].record(.004,labels)
-                m['synthetic'].set(0 if incident else 1,labels)
+                m['synthetic'].set(0 if m['interval_failures'] else 1,labels);m['interval_failures']=0
             if svc==C.REDIS: m['redis'].record(.002,labels)
             if svc==C.BACKEND: m['probe'].set(1,labels)
             if int(now-scenario.start)% (1 if pressure else 30)==0 and svc in (C.SERVICE,C.REDIS,C.BACKEND):
-                self.log(svc,now,'service.health', {**scenario.context(now),
-                    'diagnostic.cpu_throttled':bool(pressure) and gateway,'backend.probe.success':True,
+                self.log(svc,now,'service.health', {**scenario.context(now,inst),
+                    'diagnostic.cpu_throttled':bool(incident),'backend.probe.success':True,
                     'redis.latency_seconds':.002,'jvm.gc.pause_seconds':.004,
                     'node.cpu.available_cores':6.5,'cpu.limit.cores':.25 if incident and gateway else 2.,
-                    'business.impact':'API-dependent transactions delayed or timed out' if incident else 'none',
+                    'business.impact':'API-dependent transactions delayed or timed out' if pressure else 'none',
                     **({'service.version':'dependency-stable','build_version':'dependency-stable'} if svc!=C.SERVICE else {})},inst)
         self.export_metrics(now)
     def export_metrics(self, now):

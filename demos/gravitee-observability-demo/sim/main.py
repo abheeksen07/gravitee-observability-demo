@@ -19,7 +19,7 @@ class SummarySink:
     summary=True
     def __init__(self):
         self.counts=dict(metrics=0,spans=0,logs=0,events=0)
-        self.final_metrics={};self.failed_logs=0;self.active_traces={};self.timing_errors=0
+        self.final_metrics={};self.final_state={};self.failed_logs=0;self.active_traces={};self.timing_errors=0
     def write(self,kind,data): self.counts[kind]+=1
     def spans(self,spans):
         self.counts['spans']+=len(spans)
@@ -51,6 +51,8 @@ class SummarySink:
                     points=metric.data.data_points
                     if metric.name in ('http_server_requests_total','gravitee_failed_request_attempts_total'):
                         self.final_metrics[(instance,metric.name)]=sum(p.value for p in points)
+                    if metric.name in ('container_spec_cpu_quota_cores','gravitee_gateway_pending_requests','gravitee_synthetic_check_success'):
+                        self.final_state[(instance,metric.name)]=points[-1].value
                     if metric.name=='traces_span_metrics_duration': native=sum(p.count for p in points)
                     if metric.name=='traces_span_metrics_duration_seconds': classic=sum(p.count for p in points)
             assert native==classic
@@ -83,7 +85,7 @@ def run(duration=None, fast=False, path=None, live=False, seed=7):
     start=time.time()-(duration+10 if fast else 0)
     scenario=Scenario(start); traffic=Traffic(scenario,seed); sampler=Sampler(); timeline=Timeline(scenario)
     pipeline=Telemetry(start,metric,spans,logs,batch=live)
-    totals={'requests':0,'failed_attempts':0,'sampled_traces':0,'metric_ticks':0}
+    totals={'requests':0,'failed_attempts':0,'sampled_traces':0,'metric_ticks':0,'recovered_requests':0,'recovered_failures':0,'recovered_max_duration_seconds':0.}
     second=0;pending=[];sequence=0
     try:
         while not stop.is_set() and (duration is None or second<duration or pending):
@@ -102,18 +104,30 @@ def run(duration=None, fast=False, path=None, live=False, seed=7):
                 else: sink.write('events',event)
                 pipeline.log(C.SERVICE,now,event['title'],{**scenario.context(now),'event.name':event['type'],**event['labels']})
             if duration is None or second<duration:
-                for index in range(300):
-                    req=traffic.request(now+(index+1)/301)
+                count=scenario.arrivals(now)
+                for index in range(count):
+                    req=traffic.request(now+(index+1)/(count+1))
                     sequence+=1;heapq.heappush(pending,(req.end,sequence,req))
             while pending and pending[0][0]<=now+1:
                 _,_,req=heapq.heappop(pending)
                 sampled=sampler.take(req);pipeline.request(req,sampled)
                 totals['requests']+=1;totals['failed_attempts']+=req.status>=500;totals['sampled_traces']+=sampled
+                if not scenario.repeat and req.start>=start+1440:
+                    totals['recovered_requests']+=1
+                    totals['recovered_failures']+=req.status>=500
+                    totals['recovered_max_duration_seconds']=max(totals['recovered_max_duration_seconds'],req.duration)
             pipeline.tick(now+1,scenario);totals['metric_ticks']+=1;second+=1
             if second%60==0: print(json.dumps({'elapsed_seconds':second,**totals}),flush=True)
     finally:
         pipeline.shutdown();sink.close()
     audit=sink.validate(totals) if not live and isinstance(sink,SummarySink) else {}
+    if not live and isinstance(sink,SummarySink) and totals['recovered_requests']:
+        assert totals['recovered_failures']==0 and totals['recovered_max_duration_seconds']<1
+        for pod in (C.SERVICE+'-0',C.SERVICE+'-1'):
+            assert sink.final_state[(pod,'container_spec_cpu_quota_cores')]==2
+            assert sink.final_state[(pod,'gravitee_synthetic_check_success')]==1
+            assert sink.final_state[(pod,'gravitee_gateway_pending_requests')]<2
+        audit['post_rollback_normal_state']='passed'
     result={**totals,'signals':sink.counts,'release':scenario.version,'live':live,'audit':audit,'pending_at_shutdown':len(pending)}
     print(json.dumps(result),flush=True);return result
 

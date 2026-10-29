@@ -7,11 +7,14 @@
 3. Eliminate backend slowdown with healthy probes and short successful calls.
    A 504 produced at the gateway does not imply a backend request was made.
 4. Compare Redis command latency and JVM GC pauses with baseline. Both stay normal.
-5. Correlate the 03:00 resource deployment with CPU limit 2 -> 0.25 cores,
+5. Correlate the 03:00 gateway release (pod 1 follows at 03:30) with CPU limit 2 -> 0.25 cores,
    throttling and queues. Node CPU capacity remains available. Probable cause is
    the container quota regression; actual deployment mechanism needs validation.
-6. Restore prior 2-core limits and gradually roll the affected gateway deployment.
-   In this generated episode rollback begins at 23:00 and drains by 24:00.
+6. Roll back the gateway release, including its bundled deployment resource
+   configuration. This restores the previous release identity and 2-core limits.
+   Pod 0 rolls back at 23:00, pod 1 at 23:30; queued/in-flight requests drain
+   before both pods return to normal by 24:00. Keep the stream running afterward;
+   there is no automatic redeployment. This is not a real Kubernetes operation.
 7. Confirm throttling, API latency/error rates and synthetic checks recover.
    Reconcile failed transactions before retrying writes; attempts are not unique
    transactions. Add resource-configuration checks and canary validation.
