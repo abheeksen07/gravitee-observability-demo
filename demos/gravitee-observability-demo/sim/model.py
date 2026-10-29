@@ -24,13 +24,15 @@ class Request:
     status: int
     stages: tuple
     attrs: dict
+    calls: tuple = ()
     @property
     def duration(self): return self.end - self.start
 
 class Scenario:
     """One generated release, with a 30-second rollout/rollback stagger."""
-    def __init__(self, start, repeat=None, launch_id=None):
+    def __init__(self, start, repeat=None, launch_id=None, expanded=None):
         self.start = start
+        self.expanded = C.EXPANDED_TRACING if expanded is None else expanded
         self.repeat = C.INCIDENT_REPEAT if repeat is None else repeat
         self.id = launch_id or uuid.uuid4().hex
         stamp = datetime.fromtimestamp(start, timezone.utc).strftime('%Y%m%d.%H%M%S')
@@ -85,6 +87,7 @@ class Scenario:
 class Traffic:
     def __init__(self, scenario, seed=7):
         self.scenario, self.rng, self.sequence = scenario, random.Random(seed), 0
+        self.dependency_rng = random.Random(seed ^ 0xA1A91)
 
     def request(self, arrival_at):
         self.sequence += 1
@@ -102,6 +105,7 @@ class Traffic:
         queue_demand = (self.rng.uniform(1.,9.) if self.rng.random()<.40 else
                         self.rng.uniform(.01,.25))*pressure if pressure else self.rng.uniform(.001,.004)
         backend = dict(zip(C.ROUTES,(.018,.035,.025)))[route]*self.rng.uniform(.85,1.15)
+        if self.scenario.expanded: backend *= 8
         encoding = self.rng.uniform(.002,.004)
         budget = deadline-redis-processing-backend-encoding
         error = queue_demand >= budget
@@ -138,4 +142,11 @@ class Traffic:
                       'gateway.processing_budget_seconds':budget,
                       'deadline.exceeded':error,
                       'error.type': 'GatewayDeadlineExceeded' if error else ''})
-        return Request(attrs['request_id'],instance,route,start,completed_at,status,tuple(stages),attrs)
+        calls=()
+        if self.scenario.expanded and not error:
+            from sim.dependencies import plan
+            backend_stage=next(s for s in stages if s.service==C.BACKEND)
+            calls=plan(backend_stage.start,backend_stage.end,self.scenario.position(arrival_at),self.dependency_rng)
+        attrs.update({'tracing.expanded':self.scenario.expanded,
+                      'dependency.recovered_errors':sum(c.status>=500 for c in calls)})
+        return Request(attrs['request_id'],instance,route,start,completed_at,status,tuple(stages),attrs,calls)

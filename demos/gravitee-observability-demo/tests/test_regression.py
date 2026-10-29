@@ -25,7 +25,7 @@ class CaptureMetrics:
 
 class ModelTests(unittest.TestCase):
     def test_complete_episode_and_continued_healthy_traffic(self):
-        scenario=Scenario(0,launch_id='a'*32);traffic=Traffic(scenario)
+        scenario=Scenario(0,expanded=False,launch_id='a'*32);traffic=Traffic(scenario)
         failures=0; phases=Counter(); events=[];timeline=Timeline(scenario); generated=0; active=0
         for second in range(3601):
             events.extend(timeline.due(second))
@@ -49,10 +49,10 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(len(events),10)
         self.assertGreater(phases['cpu-throttling'],350000)
         self.assertEqual(scenario.context(3600)['build_version'],scenario.previous)
-        replay=Scenario(0,repeat=True)
+        replay=Scenario(0,expanded=False,repeat=True)
         self.assertTrue(replay.incident(1980)); self.assertFalse(scenario.incident(1980))
     def test_staggered_release_and_rollback_restore_each_pod(self):
-        scenario=Scenario(0,launch_id='d'*32)
+        scenario=Scenario(0,expanded=False,launch_id='d'*32)
         a,b=C.SERVICE+'-0',C.SERVICE+'-1'
         for now,states in ((179,(False,False)),(180,(True,False)),(210,(True,True)),
                            (1380,(False,True)),(1410,(False,False)),(3600,(False,False))):
@@ -66,7 +66,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(scenario.pressure(3600,a),0)
 
     def test_variance_does_not_add_a_load_surge_or_dependency_failures(self):
-        scenario=Scenario(0); traffic=Traffic(scenario)
+        scenario=Scenario(0,expanded=False); traffic=Traffic(scenario)
         arrivals=[scenario.arrivals(t) for t in range(3600)]
         self.assertGreater(max(arrivals)-min(arrivals),10)
         self.assertTrue(all(291<=n<=309 for n in arrivals))
@@ -88,7 +88,7 @@ class ModelTests(unittest.TestCase):
     def test_latency_precedes_deadline_errors_and_budget_drives_status(self):
         rates=[]
         for offset in (0,15,30,45):
-            traffic=Traffic(Scenario(0),seed=11)
+            traffic=Traffic(Scenario(0,expanded=False),seed=11)
             reqs=[traffic.request(180+offset) for _ in range(10000)]
             pod=[r for r in reqs if r.instance==C.SERVICE+'-0']
             rates.append(sum(r.status>=500 for r in pod)/len(pod))
@@ -106,9 +106,9 @@ class ModelTests(unittest.TestCase):
         self.assertLess(rates[3],.23)
 
     def test_launch_context_and_metadata(self):
-        a,b=Scenario(100),Scenario(100)
+        a,b=Scenario(100,expanded=False),Scenario(100,expanded=False)
         self.assertNotEqual(a.version,b.version)
-        first=Traffic(Scenario(0))
+        first=Traffic(Scenario(0,expanded=False))
         for _ in range(100):
             request=first.request(270.01)
             if request.status==504: break
@@ -127,7 +127,7 @@ class ModelTests(unittest.TestCase):
                 self.assertFalse(any(k.startswith(('cloud.','k8s.')) for k in attrs))
         self.assertNotIn('plant',resource_labels(C.SERVICE))
     def test_events_urls_and_timing(self):
-        scenario=Scenario(100,launch_id='b'*32);timeline=Timeline(scenario)
+        scenario=Scenario(100,expanded=False,launch_id='b'*32);timeline=Timeline(scenario)
         events=timeline.due(2000)
         self.assertEqual(len(events),10)
         by={e['type']:e for e in events}
@@ -144,7 +144,7 @@ class ModelTests(unittest.TestCase):
                 self.assertNotIn(forbidden,event['labels'])
         self.assertEqual(timeline.due(4000),[])
     def test_sampling_is_bounded_and_does_not_change_traffic(self):
-        scenario=Scenario(0);a=Traffic(scenario);b=Traffic(scenario);sampler=Sampler()
+        scenario=Scenario(0,expanded=False);a=Traffic(scenario);b=Traffic(scenario);sampler=Sampler()
         sampled=Counter()
         for i in range(18000):
             req=a.request(300+i/300)
@@ -158,7 +158,7 @@ class PipelineTests(unittest.TestCase):
     def setUp(self):
         self.metrics=CaptureMetrics();self.spans=InMemorySpanExporter();self.logs=InMemoryLogRecordExporter()
         self.p=Telemetry(0,self.metrics,self.spans,self.logs)
-        self.scenario=Scenario(0,launch_id='c'*32);self.traffic=Traffic(self.scenario)
+        self.scenario=Scenario(0,expanded=False,launch_id='c'*32);self.traffic=Traffic(self.scenario)
     def tearDown(self): self.p.shutdown()
     def requests(self):
         reqs=[]
@@ -259,8 +259,9 @@ class PipelineTests(unittest.TestCase):
         health=[r.log_record for r in self.logs.get_finished_logs() if r.log_record.body=='service.health' and r.log_record.attributes['service_name']==C.SERVICE]
         self.assertEqual(len(health),8) # two pods, three incident ticks, one quiet baseline tick
         self.assertTrue(all(.005 in p.explicit_bounds for p in self.metrics.points('jvm_gc_pause_seconds')))
-        self.assertTrue(all(p.value==1 for p in self.metrics.points('gravitee_backend_probe_success')))
-        self.assertTrue(all(abs(p.sum/p.count-.002)<1e-8 for p in self.metrics.points('redis_command_duration_seconds')))
+        self.assertTrue(all(p.value==1 for p in self.metrics.points('aiapi_backend_probe_success')))
+        # Redis durations are now recorded from actual EVAL stages, not fixed ticks.
+        self.assertEqual(self.metrics.points('redis_command_duration_seconds'),[])
     def test_per_pod_cpu_release_rollback_and_normal_final_state(self):
         times=(180,210,1380,1410,1440,1800,3600)
         for now in times: self.p.tick(now,self.scenario)
@@ -269,12 +270,65 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(limits,[.25,.25,2,2,2,2,2] if pod.endswith('-0') else [2,.25,.25,2,2,2,2])
             throttled=[p.value for p in self.metrics.points('container_cpu_cfs_throttled_periods_total') if p.attributes['instance']==pod]
             self.assertEqual(throttled[-3:],[throttled[-3]]*3)
-        self.assertTrue(all(p.value==1 for p in self.metrics.points('gravitee_synthetic_check_success')))
+        self.assertTrue(all(p.value==1 for p in self.metrics.points('aiapi_synthetic_check_success')))
         events={e['type']:e for e in Timeline(self.scenario).due(3600)}
         self.assertIn('code release',events['deployment']['labels']['change_summary'])
         self.assertEqual(events['rollback']['labels']['previous_version'],self.scenario.version)
         self.assertEqual(events['rollback']['labels']['new_version'],self.scenario.previous)
         self.assertIn('previous gateway release',events['recovery']['labels']['change_summary'])
+
+    def test_infrastructure_dimensions_jitter_and_cpu_conservation(self):
+        from sim.infrastructure import variation
+        self.assertEqual(variation(123,C.SERVICE,'cpu'),variation(123,C.SERVICE,'cpu'))
+        for t in range(301,331): self.p.tick(t,self.scenario)
+        def latest(name):
+            return [p for p in self.metrics.points(name) if p.time_unix_nano==330000000000]
+        for pod in (C.SERVICE+'-0',C.SERVICE+'-1'):
+            cores=[p for p in latest('container_cpu_usage_seconds_total') if p.attributes['pod']==pod]
+            total=next(p.value for p in latest('process_cpu_seconds_total') if p.attributes['instance']==pod)
+            self.assertEqual({p.attributes['cpu'] for p in cores},{'0','1','2','3'})
+            self.assertAlmostEqual(sum(p.value for p in cores),total)
+            self.assertLess(total,30*.25)
+            samples=[p.value for p in self.metrics.points('process_resident_memory_bytes') if p.attributes['instance']==pod]
+            self.assertGreater(len(set(samples)),20)
+        nodes=latest('node_cpu_seconds_total')
+        self.assertEqual(len(nodes),2*8*3)
+        for node in {p.attributes['node'] for p in nodes}:
+            for cpu in map(str,range(8)):
+                selected=[p for p in nodes if p.attributes['node']==node and p.attributes['cpu']==cpu]
+                self.assertAlmostEqual(sum(p.value for p in selected),30)
+                self.assertTrue(all('pod' not in p.attributes for p in selected))
+        network=latest('system_network_io_bytes_total')
+        self.assertEqual({p.attributes['direction'] for p in network},{'receive','transmit'})
+        self.assertTrue(all(p.attributes['device']=='eth0' for p in network))
+        for svc in C.SERVICES:
+            self.assertTrue(svc.startswith('AIAPI-'))
+
+    def test_redis_exporter_metrics_match_modeled_commands_and_stay_healthy(self):
+        reqs=self.requests()
+        stages=[stage for req in reqs for stage in req.stages if stage.service==C.REDIS]
+        for req in reqs: self.p.request(req,False)
+        self.p.tick(301,self.scenario)
+        commands=self.metrics.points('redis_commands_total')
+        self.assertEqual({p.attributes['cmd'] for p in commands},{'eval','get','set'})
+        self.assertEqual(next(p.value for p in commands if p.attributes['cmd']=='eval'),len(stages))
+        duration=next(p.value for p in self.metrics.points('redis_commands_duration_seconds_total') if p.attributes['cmd']=='eval')
+        self.assertAlmostEqual(duration,sum(stage.end-stage.start for stage in stages))
+        histogram=self.metrics.points('redis_command_duration_seconds')
+        self.assertEqual(sum(p.count for p in histogram),len(stages))
+        self.assertAlmostEqual(sum(p.sum for p in histogram),duration)
+        self.assertEqual(sum(p.value for p in commands),self.metrics.points('redis_commands_processed_total')[0].value)
+        hits=self.metrics.points('redis_keyspace_hits_total')[0].value
+        misses=self.metrics.points('redis_keyspace_misses_total')[0].value
+        self.assertEqual(hits+misses,next(p.value for p in commands if p.attributes['cmd']=='get'))
+        self.assertEqual({p.attributes['db'] for p in self.metrics.points('redis_db_keys')},{'db0','db1'})
+        for name in ('redis_blocked_clients','redis_evicted_keys_total'):
+            self.assertTrue(all(p.value==0 for p in self.metrics.points(name)))
+        self.assertEqual(self.metrics.points('redis_up')[0].value,1)
+        used=self.metrics.points('redis_memory_used_bytes')[0].value
+        maximum=self.metrics.points('redis_memory_max_bytes')[0].value
+        self.assertTrue(0<used<maximum)
+        self.assertTrue(all(p.attributes['service']==C.REDIS for p in self.metrics.points('redis_commands_total')))
 
     def test_offline_pipeline_cannot_connect_and_safe_cli(self):
         with patch.object(socket.socket,'connect',side_effect=AssertionError('network forbidden')):

@@ -35,11 +35,11 @@ class Timeline:
                 'source_url':root+'/sim/model.py',
                 'source_history_url':f'{C.SOURCE_REPOSITORY}/commits/{C.SOURCE_REFERENCE}/demos/gravitee-observability-demo/sim/model.py',
                 'runbook_url':root+'/docs/runbook.md', 'evidence_url':root+'/docs/service-views.md',
-                'evidence':'container_cpu_cfs_throttled_periods_total; gravitee_gateway_pending_requests; backend probes; Redis latency; GC pauses',
+                'evidence':'container_cpu_cfs_throttled_periods_total; aiapi_gateway_pending_requests; backend probes; Redis latency; GC pauses',
                 'business_impact':'none' if kind in ('baseline','recovery') else 'API-dependent transaction attempts fail; unique affected transactions unknown',
-                'change_source':'gravitee-platform-operations'}
+                'change_source':'AIAPI-platform-operations'}
             result.append({'category':'deploys' if kind in ('deployment','rollback') else 'annotations',
-                'type':kind,'source':'gravitee-platform-operations','title':title,
+                'type':kind,'source':'AIAPI-platform-operations','title':title,
                 'labels':labels,'payload_object':{'timestamp':datetime.fromtimestamp(at,timezone.utc).isoformat(),
                 'change_summary':summary,**context}})
         return result

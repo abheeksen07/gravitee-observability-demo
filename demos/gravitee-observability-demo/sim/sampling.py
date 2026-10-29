@@ -9,6 +9,7 @@ class Budget:
         self.tokens-=1; return True
 class Sampler:
     def __init__(self):
-        self.error=Budget(90); self.slow=Budget(90); self.normal=Budget(18)
+        self.dependency_error=Budget(90); self.error=Budget(90); self.slow=Budget(90); self.normal=Budget(18)
     def take(self, req):
+        if req.status<500 and req.attrs.get('dependency.recovered_errors',0): return self.dependency_error.take(req.end)
         return (self.error if req.status>=500 else self.slow if req.duration>=1 else self.normal).take(req.end)
