@@ -1,7 +1,7 @@
 from sim import config as C
 
 def service_labels(service, instance=None):
-    labels = {'demo':'gravitee-api-platform', 'demo_build':'gravitee-release-rollback-v2', 'service': service, 'service_name': service, 'lens_service': service,
+    labels = {'demo':'gravitee-api-platform', 'demo_build':'gravitee-deadline-diagnostics-v3', 'service': service, 'service_name': service, 'lens_service': service,
             'application': 'gravitee-api-platform', 'team': 'api-platform',
             'environment': 'prod-us', 'service_role': C.ROLES[service],
             'instance': instance or service + '-0', 'az': 'us-placement-unvalidated'}

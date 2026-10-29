@@ -13,6 +13,7 @@ from opentelemetry.sdk.metrics.view import View, ExplicitBucketHistogramAggregat
 from sim import config as C
 from sim.identity import service_labels, resource_labels
 from sim.span_metrics import SPAN_VIEWS, SpanMetrics
+from sim import diagnostics
 
 DURATION_VIEWS=[View(instrument_name=name,aggregation=ExplicitBucketHistogramAggregation(
     [.001,.005,.01,.025,.05,.1,.25,.5,1.,2.5,5.,7.5,10.]))
@@ -79,7 +80,8 @@ class Telemetry:
         gateway['queue_seconds']+=req.stages[0].end-req.stages[0].start
         if req.status>=500:
             gateway['failed'].add(1,gateway['labels']);gateway['interval_failures']+=1
-        root=server=None; children=[]
+        root=server=None; children=[]; detail_spans={}
+        plans=[diagnostics.details(req,stage) for stage in req.stages]
         if sampled:
             root=client['tracer'].start_span(req.route,kind=trace.SpanKind.CLIENT,start_time=int(req.start*1e9),attributes=req.attrs)
             server=gateway['tracer'].start_span(req.route,context=trace.set_span_in_context(root),kind=trace.SpanKind.SERVER,
@@ -93,11 +95,19 @@ class Telemetry:
                     child.set_status(trace.Status(trace.StatusCode.ERROR,'gateway deadline expired'))
                     child.add_event('exception',{'exception.type':'GatewayDeadlineExceeded',
                         'exception.message':'CPU-throttled processing exhausted the caller deadline'},timestamp=int(stage.end*1e9))
-                if stage.name=='gateway.request_queue' and req.attrs['scenario.phase'] in ('cpu-throttling','recovering'):
-                    wait=m['tracer'].start_span('gateway.cpu.cfs_wait',context=trace.set_span_in_context(child),
-                        start_time=int(stage.start*1e9),attributes={'cpu.limit.cores':req.attrs['cpu.limit.cores'],
-                        'scheduling.reason':'container CFS quota exhausted', 'request_id':req.id})
-                    wait.end(int(stage.end*1e9))
+                if stage.name=='gateway.request_queue' and req.status>=500:
+                    child.set_status(trace.Status(trace.StatusCode.ERROR,'queue exhausted processing budget'))
+                for detail in plans[len(children)]:
+                    attrs={**req.attrs,**diagnostics.attributes(req,stage,detail)}
+                    attrs.pop('http.response.status_code',None)
+                    sub=m['tracer'].start_span(detail.name,context=trace.set_span_in_context(child),
+                        kind=trace.SpanKind.INTERNAL,start_time=int(detail.start*1e9),attributes=attrs)
+                    if detail.error:
+                        sub.set_status(trace.Status(trace.StatusCode.ERROR,'insufficient gateway deadline budget'))
+                    sub.add_event('gateway.stage.completed',{'deadline.remaining_seconds':attrs['deadline.remaining_seconds'],
+                        'diagnostic.outcome':attrs['diagnostic.outcome']},timestamp=int(detail.end*1e9))
+                    detail_spans[(len(children),detail.name)]=sub
+                    sub.end(int(detail.end*1e9))
                 children.append(child)
             if req.status>=500:
                 for span in (root,server): span.set_status(trace.Status(trace.StatusCode.ERROR,'gateway deadline exceeded'))
@@ -111,6 +121,12 @@ class Telemetry:
                     attrs['exception.stacktrace']='GatewayDeadlineExceeded: gateway request deadline exceeded\n  at gateway.deadline.check\n  at gateway.request_queue.resume'
                 self.log(stage.service,stage.end,stage.name,attrs,
                     req.instance if stage.service==C.SERVICE else None,children[i] if sampled else None)
+                for detail in plans[i]:
+                    detail_attrs={**self.stage_attrs(req,stage),**diagnostics.attributes(req,stage,detail),
+                        'diagnostic.reason':'error' if req.status>=500 else 'latency' if req.duration>=1 else 'baseline'}
+                    self.log(stage.service,detail.end,detail.name,detail_attrs,
+                        req.instance if stage.service==C.SERVICE else None,
+                        detail_spans.get((i,detail.name)))
             self.log(C.SERVICE,req.end,'gateway.response',dict(req.attrs,**{'request.duration_seconds':req.duration}),req.instance,server)
             self.log(C.CLIENT,req.end,'caller.response',dict(req.attrs,**{'request.duration_seconds':req.duration}),span=root)
         for child,stage in zip(children,req.stages): child.end(int(stage.end*1e9))

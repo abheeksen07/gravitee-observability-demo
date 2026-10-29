@@ -53,7 +53,7 @@ class Scenario:
     def pressure(self, now, instance=None):
         rollback = 1380+30*self.pod_index(instance)
         pos = self.position(now)
-        if self.incident(now, instance): return 1.
+        if self.incident(now, instance): return min(1.,max(0.,(pos-(180+30*self.pod_index(instance)))/45))
         return max(0., (rollback+30-pos)/30) if rollback <= pos < rollback+30 else 0.
 
     def arrivals(self, now):
@@ -92,17 +92,21 @@ class Traffic:
         incident = self.scenario.incident(arrival_at,instance)
         pressure = self.scenario.pressure(arrival_at,instance)
         route = self.rng.choices(C.ROUTES,weights=(.45,.25,.30))[0]
-        # Independent request outcomes with an approximately 20% timeout rate.
-        error = incident and self.rng.random() < .20
-        slow = pressure > 0 and not error and self.rng.random() < .33
-        status = 504 if error else 201 if route.startswith('POST') else 200
         redis = self.rng.uniform(.0015,.0025)
         processing = self.rng.uniform(.019,.029) if incident else self.rng.uniform(.004,.008)
         rejection = self.rng.uniform(.003,.005)
         deadline = self.rng.uniform(4.5,5.5)
-        queue = (deadline-redis-processing-rejection if error else
-                 self.rng.uniform(.9,2.2)*pressure if slow else
-                 self.rng.uniform(.08,.22)*pressure if pressure else self.rng.uniform(.001,.004))
+        # Queue residence grows over 45 seconds after rollout. A heavy-tail
+        # workload component represents requests waiting for constrained workers.
+        # Status is derived from the predicted budget, never sampled separately.
+        queue_demand = (self.rng.uniform(1.,9.) if self.rng.random()<.40 else
+                        self.rng.uniform(.01,.25))*pressure if pressure else self.rng.uniform(.001,.004)
+        backend = dict(zip(C.ROUTES,(.018,.035,.025)))[route]*self.rng.uniform(.85,1.15)
+        encoding = self.rng.uniform(.002,.004)
+        budget = deadline-redis-processing-backend-encoding
+        error = queue_demand >= budget
+        queue = deadline-redis-processing-rejection if error else queue_demand
+        status = 504 if error else 201 if route.startswith('POST') else 200
         durations = [('gateway.request_queue', C.SERVICE, queue),
                      ('redis.rate_limit.check', C.REDIS, redis),
                      ('gateway.policy.evaluate', C.SERVICE, processing)]
@@ -110,9 +114,8 @@ class Traffic:
             # A gateway deadline is not a transport failure or a backend call.
             durations.append(('gateway.deadline_exceeded', C.SERVICE, rejection))
         else:
-            backend = dict(zip(C.ROUTES,(.018,.035,.025)))[route]*self.rng.uniform(.85,1.15)
             durations.extend([('backend.http.request', C.BACKEND, backend),
-                              ('gateway.response.encode', C.SERVICE, self.rng.uniform(.002,.004))])
+                              ('gateway.response.encode', C.SERVICE, encoding)])
         start = arrival_at
         completed_at = start+sum(x[2] for x in durations)
         t=start; stages=[]
@@ -128,5 +131,11 @@ class Traffic:
                       'business.outcome': 'failed-attempt' if error else 'delayed' if delayed else 'completed',
                       'business.impact': 'API-dependent transaction attempt not completed; reconcile before retrying writes' if error else 'response delayed' if delayed else 'none',
                       'cpu.limit.cores': .25 if incident else 2.,
+                      'request.deadline_seconds':deadline,
+                      'gateway.queue.pressure':pressure,
+                      'gateway.queue.demand_seconds':queue_demand,
+                      'gateway.queue.wait_seconds':queue,
+                      'gateway.processing_budget_seconds':budget,
+                      'deadline.exceeded':error,
                       'error.type': 'GatewayDeadlineExceeded' if error else ''})
         return Request(attrs['request_id'],instance,route,start,completed_at,status,tuple(stages),attrs)

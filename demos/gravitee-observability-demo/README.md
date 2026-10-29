@@ -87,6 +87,11 @@ No specific code defect or network outage is invented.
 The traffic model chooses each request's status and exact stage timings once.
 Route selection, route-specific healthy backend latency, queue residence and
 4.5–5.5-second deadlines vary using an independent seeded request generator.
+Per-pod queue pressure builds over 45 seconds after rollout. Timeouts are derived
+from queue demand and the remaining budget for gateway processing and healthy
+backend work; there is no separately sampled HTTP error flag. Latency therefore
+increases before deadline failures emerge. Requests that cannot finish within the
+budget wait until the deadline and return 504 without invoking the backend.
 Arrival-rate waves are independent of the release state. Initial connectivity
 suspicions refer to caller-observed timeouts, not fabricated transport failures.
 Metrics count all requests regardless of sampling; traces and logs reuse those
@@ -294,3 +299,38 @@ XCOR query results. Ingestion, API categories, native-histogram mapping, tenant
 relabeling and service discovery remain unverified. Runtime instrumentation,
 actual AKS placement, real deployment tooling and the number of unique affected
 customer transactions require customer validation.
+
+## Long-running spans and matching logs
+
+The `gravitee-deadline-diagnostics-v3` build adds a shared diagnostic stage plan:
+
+| Parent stage | Detailed child spans / stage-log bodies |
+| --- | --- |
+| `gateway.request_queue` | `gateway.queue.enqueue`, `gateway.cpu.cfs_wait` (or healthy worker/backlog wait), `gateway.scheduler.runnable_wait`, `gateway.queue.resume` |
+| `gateway.policy.evaluate` | `gateway.policy.authentication`, `gateway.policy.authorization`, `gateway.policy.rate_limit_decision` |
+| `gateway.deadline_exceeded` | `gateway.deadline.check`, `gateway.response.write_timeout` |
+| `gateway.response.encode` | `gateway.response.serialize`, `gateway.response.flush` |
+
+Children partition the parent's existing duration without extending the request,
+adding retries or inventing dependency calls. A failed queue parent and its budget
+rejection/resume path are marked as errors; normal policy checks and healthy
+dependencies are not marked as failed operations. CFS waits are attributed only to
+requests arriving under the 250m configuration. Residual waits after rollback are
+labeled as backlog waits rather than continued CPU throttling.
+
+Every failed request and every request lasting at least one second produces both
+the parent-stage log and every detailed child-stage log, even when unsampled.
+Detail records carry `stage.parent`, `stage.name`, `stage.duration_seconds`,
+`request.elapsed_seconds`, `request.deadline_seconds`, `deadline.remaining_seconds`,
+`gateway.queue.pressure`, `gateway.queue.demand_seconds`,
+`gateway.processing_budget_seconds`, `diagnostic.stage_error`, and
+`request.http.response.status_code`, plus request/release/deployment context.
+Traced detail logs point to their exact child span; unsampled logs contain no
+fabricated trace/span IDs. Exception context remains on the deadline error log.
+
+Error/slow trace budgets remain bounded at 90/90 traces per minute and ordinary
+traces at 18/minute; richer traces do not increase RED operation counts. More
+detail increases log records for the same failed/slow population, so full JSONL
+captures are larger. This remains a generated queue-pressure/time-budget model,
+not a physical AKS worker-capacity benchmark. Release rollback still restores
+normal operation by minute 24, with no automatic new deployment.

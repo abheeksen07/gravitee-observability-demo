@@ -6,7 +6,7 @@ a view/discovery rule for `application="gravitee-api-platform"`, grouping by
 `gravitee-api-gateway` as `$service`. All eleven services emit `demo_service_info`;
 managed dependencies are discovery-only until their actual request paths are known.
 
-Stable labels: `demo="gravitee-api-platform"`, `demo_build="gravitee-release-rollback-v2"`, `service`, `service_name`, `lens_service`, `service_role`,
+Stable labels: `demo="gravitee-api-platform"`, `demo_build="gravitee-deadline-diagnostics-v3"`, `service`, `service_name`, `lens_service`, `service_role`,
 `application`, `team`, `environment="prod-us"`, `instance`, and
 `az="us-placement-unvalidated"`. The last is an explicit unvalidated grouping
 value, not a claim about an Azure zone. Gateway instances are
@@ -174,3 +174,27 @@ the 30-minute episode without another deployment. Counter values do not reset:
 error/throttling **rates** return to zero, while cumulative totals remain.
 Synthetic check success follows completed request failures in each interval.
 Source release/rollback observations are generated, with no invented CI run URLs.
+
+## Detailed duration/error investigation and display units
+
+For requests lasting at least one second, inspect `gateway.request_queue` and its
+CFS/runnable-wait children before policy/backend durations. Error requests add
+`gateway.deadline.check` and `gateway.response.write_timeout`; successful slow
+requests retain short, successful backend operations. All failed/slow requests
+have matching stage logs, whether or not a trace was sampled. Filter by
+`request_id`, `stage.name`, `diagnostic.stage_error`, and `deadline.remaining_seconds`
+to follow the remaining processing budget through each stage. A single modeled
+request supplies all outcomes and times. The 45-second queue-pressure ramp means
+latency can rise before errors; RED is not generated from an independent error
+probability. Native/classic operation histograms still count only incoming
+operations, not these extra INTERNAL diagnostic spans.
+
+**Duration samples and PromQL quantiles are in seconds.** Normal route P99 values
+near `0.035`–`0.060` represent **35–60 milliseconds**, not microseconds. Incident
+deadline durations around `5` represent **5 seconds**, not 5 milliseconds. Select
+a seconds-aware panel display unit and check the raw query output before adding
+any conversion; an extra division by 1,000 can make the screenshot appear three
+orders of magnitude too small. CPU rate values are cores (for example `0.6`); use
+a cores/number display if the panel title says cores rather than formatting as
+60 percent. These display settings were not modified remotely or verified in the
+tenant. Do not scale simulator durations to compensate for a panel-unit mismatch.

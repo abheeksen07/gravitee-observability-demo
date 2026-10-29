@@ -1,57 +1,57 @@
-# Release rollout and rollback validation
+# Deadline and detailed span/log validation
 
+All execution was offline, using Python 3.12 and unchanged pinned dependencies.
 Working directory: `/workspace/gravitee-observability-demo/demos/gravitee-observability-demo`.
-Python 3.12 and the unchanged reference-pinned OTel dependencies were used.
-All runs were offline; no live exporter or XCOR configuration change was made.
 
-| Check | Executed result |
+| Check | Executed outcome |
 | --- | --- |
-| Local dependency validation (`pip check`) | Passed |
-| Container dependency validation (`python -m pip check`) | Passed |
-| Local regression suite | 11 passed |
-| Rebuilt final Docker image regression suite | 11 passed |
-| Full 60-minute model | Passed; one launch incident, no automatic recurrence, both pods normal after 24:00 |
-| Per-pod release/rollback | Passed; pod 0 at 03:00 / 23:00, pod 1 at 03:30 / 23:30 |
-| Variance | Passed; arrivals 291–309/s, no release-induced surge, route latency and deadlines vary |
-| Shared HTTP outcomes, stage logs, trace IDs and parent timing | Passed |
-| Native/classic histogram equality and protobuf encoding | Passed |
+| Rebuilt Docker package and dependency validation | Passed |
+| Local regression suite | 13 passed |
+| Container regression suite | 13 passed |
+| Full 60-minute request model | Passed; normal state continues without redeployment |
+| Latency-before-error onset | Passed; pressure ramps for 45 seconds per pod; failures follow insufficient processing budget |
+| Request outcomes | Passed; successful durations stay within deadline, failed durations equal their deadline, no backend call on gateway deadline failure |
+| Detailed child spans | Passed; child intervals partition parent time with no added latency |
+| Trace/log correlation | Passed; each sampled detail log references its exact child span |
+| Unsampled failed/slow logs | Passed; all parent/detail stages present without fabricated trace/span IDs |
+| Serialized detailed error + unsampled slow request | Passed; 15 error-trace spans and 35 total logs including health records, CFS/deadline details and timeout log present |
+| Native/classic operation population and protobuf encoding | Passed; added INTERNAL spans do not inflate direct RED counts |
+| One-second metrics, counter/gauge semantics, healthy dependencies | Passed |
+| Full accelerated 31-minute SDK pipeline | Passed; exit 0 |
+| Post-rollback normal state | Passed; both limits 2 cores, normal queues and checks, zero post-recovery failures |
+| Event timeline | Passed; ten observations and no automatic recurrence |
 | Offline network guard | Passed |
-| Full accelerated 31-minute SDK episode | Passed; exit 0, final outstanding requests drained |
-| Final normal-state audit | Passed; 2-core limits, normal queues, successful checks, no post-recovery failures |
-| Real-time Docker JSONL capture | All four signals; four metric exports exactly one second apart; 11 discovery and 6 compute services |
-| Baseline/recovery event labels | Passed; business impact is `none`, no invented CI/commit/deployment-run URLs |
-| Toyota preservation | Reference checkout remains clean |
-| Whitespace and tracked `.env` check | Passed; no tracked `.env` |
+| Toyota checkout and tracked `.env` check | Unchanged Toyota checkout; no tracked `.env` |
 
-The complete episode command was:
+Complete episode command:
 
 ```bash
 cd /workspace/gravitee-observability-demo/demos/gravitee-observability-demo
 docker compose run --rm --no-deps gravitee-sim python -u -m sim.main --fast --duration 1860
 ```
 
-Measured SDK export result:
+Measured final result:
 
 ```json
 {
   "requests": 558211,
-  "failed_attempts": 72111,
-  "sampled_traces": 4288,
+  "failed_attempts": 71314,
+  "sampled_traces": 4277,
   "metric_ticks": 1861,
   "recovered_requests": 125822,
   "recovered_failures": 0,
-  "recovered_max_duration_seconds": 0.05771517753601074,
+  "recovered_max_duration_seconds": 0.05747032165527344,
   "signals": {
     "metrics": 1861,
-    "spans": 32258,
-    "logs": 1089039,
+    "spans": 66598,
+    "logs": 2261486,
     "events": 10
   },
-  "release": "gateway-release-20261029.011723.fdc666c4b46e",
+  "release": "gateway-release-20261029.131221.908584ba2437",
   "live": false,
   "audit": {
     "full_population_requests": 558211,
-    "failed_attempt_metrics_and_detailed_logs": 72111,
+    "failed_attempt_metrics_and_detailed_logs": 71314,
     "trace_parent_timing": "passed",
     "native_classic_population": "passed",
     "post_rollback_normal_state": "passed"
@@ -60,22 +60,17 @@ Measured SDK export result:
 }
 ```
 
-The run generated 558,211 requests and 72,111 failed attempts, all counted by
-metrics and detailed failure logs. After minute 24, 125,822 completed requests had
-zero failures and a maximum duration below 58 ms. The final normal-state audit
-also verified both 2-core CPU limits, normal queue levels and successful checks.
-Counters retain history; their error/throttling rates return to baseline rather
-than erasing historical totals. The extra metric tick drains pending requests.
+The pipeline counted 558,211 requests, 71,314 failed attempts, 66,598 exported
+spans and 2,261,486 log records. All failed attempts matched detailed failure logs.
+Post-recovery, 125,822 requests had zero failures and a maximum duration below
+58 ms. Metric exports remain one second apart, with an extra final tick to drain
+pending requests. Trace budgets remain 90 error + 90 slow + 18 ordinary per minute;
+additional child spans and stage logs explain the same request population.
 
-The final recovery-event label correction was verified by the rebuilt image's
-regression suite; the SDK episode exercises the same request and infrastructure
-model. Generated capture files remain outside the checkout and are not committed.
+Captures were generated outside the checkout and not committed. No live exporter
+or remote XCOR configuration was started or modified. Tenant acceptance, native
+histogram mapping, and the screenshot's seconds/milliseconds display mapping
+remain separate checks. Exact deployment tooling and region are still unvalidated.
 
-Initial fixed-rate-model validation is preserved separately in
-[validation-initial.md](validation-initial.md); its exact fixed counts do not
-describe this revised variable-rate stream.
-
-Live tenant ingestion, category acceptance, native-histogram mapping and service
-catalog discovery are not established by offline checks. Exact region, deployment
-mechanism and customer transactions remain unvalidated. Release events describe
-generated code/deployment changes, not real GitHub commits, CI runs or audit logs.
+Earlier revision results are preserved in [validation-release-v2.md](validation-release-v2.md)
+and [validation-initial.md](validation-initial.md); their counts describe those earlier models.

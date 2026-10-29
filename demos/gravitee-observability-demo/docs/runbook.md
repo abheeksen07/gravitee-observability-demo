@@ -3,6 +3,8 @@
 1. Confirm caller degradation in API error percentage, latency and synthetic
    checks. Scope to `gravitee-api-gateway`, `environment=prod-us` and launch release.
 2. Inspect request queue/CFS-wait traces and detailed error/slow-request logs.
+   Follow queue enqueue, CFS/runnable wait, resume and deadline-check child spans.
+   Use remaining-budget and stage-duration log fields to explain long waits.
    Correlate by request ID and deployment ID; unsampled requests have no trace IDs.
 3. Eliminate backend slowdown with healthy probes and short successful calls.
    A 504 produced at the gateway does not imply a backend request was made.

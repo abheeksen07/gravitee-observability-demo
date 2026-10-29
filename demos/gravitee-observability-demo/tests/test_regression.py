@@ -7,7 +7,7 @@ from opentelemetry.sdk.metrics.export import MetricExportResult
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.sdk._logs.export import InMemoryLogRecordExporter
 from opentelemetry.exporter.otlp.proto.common._internal.metrics_encoder import encode_metrics
-from sim import config as C
+from sim import config as C, diagnostics
 from sim.events import Timeline
 from sim.identity import resource_labels
 from sim.model import Scenario, Traffic
@@ -85,16 +85,36 @@ class ModelTests(unittest.TestCase):
         self.assertLess(averages[C.ROUTES[0]],averages[C.ROUTES[2]])
         self.assertLess(averages[C.ROUTES[2]],averages[C.ROUTES[1]])
 
+    def test_latency_precedes_deadline_errors_and_budget_drives_status(self):
+        rates=[]
+        for offset in (0,15,30,45):
+            traffic=Traffic(Scenario(0),seed=11)
+            reqs=[traffic.request(180+offset) for _ in range(10000)]
+            pod=[r for r in reqs if r.instance==C.SERVICE+'-0']
+            rates.append(sum(r.status>=500 for r in pod)/len(pod))
+            for req in reqs:
+                self.assertEqual(req.status>=500,req.attrs['gateway.queue.demand_seconds']>=req.attrs['gateway.processing_budget_seconds'])
+                if req.status>=500:
+                    self.assertAlmostEqual(req.duration,req.attrs['request.deadline_seconds'],places=6)
+                else: self.assertLess(req.duration,req.attrs['request.deadline_seconds'])
+            if offset==15:
+                self.assertTrue(any(r.duration>=1 for r in pod))
+                self.assertTrue(all(r.status<500 for r in pod))
+        self.assertEqual(rates[:2],[0,0])
+        self.assertGreater(rates[2],.04)
+        self.assertGreater(rates[3],rates[2]+.05)
+        self.assertLess(rates[3],.23)
+
     def test_launch_context_and_metadata(self):
         a,b=Scenario(100),Scenario(100)
         self.assertNotEqual(a.version,b.version)
         first=Traffic(Scenario(0))
         for _ in range(100):
-            request=first.request(180.01)
+            request=first.request(270.01)
             if request.status==504: break
         self.assertEqual(request.status,504)
-        self.assertGreaterEqual(request.start,180)
-        self.assertGreaterEqual(request.end,184.5)
+        self.assertGreaterEqual(request.start,270)
+        self.assertGreaterEqual(request.end,274.5)
         self.assertEqual(a.context(1000)['build_version'],a.version)
         self.assertEqual(a.context(1480)['build_version'],a.previous)
         for svc in C.SERVICES:
@@ -132,7 +152,7 @@ class ModelTests(unittest.TestCase):
             self.assertEqual((req.status,req.duration),(twin.status,twin.duration))
             if sampler.take(req): sampled['error' if req.status>=500 else 'slow' if req.duration>=1 else 'normal']+=1
         self.assertLessEqual(sampled['error'],98);self.assertGreater(sampled['error'],80)
-        self.assertLessEqual(sampled['slow'],98);self.assertLessEqual(sampled['normal'],20)
+        self.assertLessEqual(sampled['slow'],106);self.assertLessEqual(sampled['normal'],22) # arrival window plus variable completion tails
 
 class PipelineTests(unittest.TestCase):
     def setUp(self):
@@ -187,9 +207,9 @@ class PipelineTests(unittest.TestCase):
         for req in reqs:
             selected=[r for r in records if r.attributes.get('request_id')==req.id]
             if req.status>=500 or req.duration>=1:
-                self.assertEqual(len(selected),len(req.stages)+2)
+                self.assertEqual(len(selected),len(req.stages)+2+sum(len(diagnostics.details(req,s)) for s in req.stages))
                 self.assertTrue(all(not r.trace_id and not r.span_id for r in selected))
-                self.assertEqual({r.attributes['stage.name'] for r in selected if 'stage.name' in r.attributes}, {s.name for s in req.stages})
+                self.assertEqual({r.attributes['stage.name'] for r in selected if 'stage.name' in r.attributes}, {s.name for s in req.stages}|{d.name for s in req.stages for d in diagnostics.details(req,s)})
             else: self.assertEqual(selected,[])
             if req.status>=500:
                 self.assertFalse(any(r.attributes['service_name']==C.BACKEND for r in selected))
@@ -199,6 +219,34 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(record.attributes['service.version'],'dependency-stable')
                 self.assertFalse(record.attributes.get('error.type'))
                 self.assertLess(record.attributes.get('stage.status_code',200),500)
+    def test_detailed_spans_and_logs_share_exact_stage_plan(self):
+        reqs=self.requests()
+        for req in reqs: self.p.request(req,True)
+        spans=self.spans.get_finished_spans()
+        records=[r.log_record for r in self.logs.get_finished_logs()]
+        for req in reqs:
+            details=[d for stage in req.stages for d in diagnostics.details(req,stage)]
+            for stage in req.stages:
+                parts=diagnostics.details(req,stage)
+                if parts:
+                    self.assertEqual(parts[0].start,stage.start)
+                    self.assertEqual(parts[-1].end,stage.end)
+                    self.assertTrue(all(a.end==b.start for a,b in zip(parts,parts[1:])))
+            for detail in details:
+                span=next(s for s in spans if s.name==detail.name and s.attributes.get('request_id')==req.id)
+                record=next(r for r in records if r.body==detail.name and r.attributes.get('request_id')==req.id)
+                self.assertEqual(record.span_id,span.context.span_id)
+                self.assertEqual(record.trace_id,span.context.trace_id)
+                self.assertAlmostEqual((span.end_time-span.start_time)/1e9,record.attributes['stage.duration_seconds'],places=6)
+                self.assertGreaterEqual(record.attributes['deadline.remaining_seconds'],0)
+                self.assertEqual(span.status.status_code.name=='ERROR',detail.error)
+            if req.status>=500:
+                self.assertTrue(any(d.name=='gateway.response.write_timeout' and d.error for d in details))
+            else:
+                self.assertFalse(any(d.name=='gateway.response.write_timeout' for d in details))
+        self.assertTrue(any(r.status>=500 for r in reqs))
+        self.assertTrue(any(r.status<500 and r.duration>=1 for r in reqs))
+
     def test_one_second_cadence_health_and_counter_gauge_semantics(self):
         for second in (301,302,303,1441,1442,1470): self.p.tick(second,self.scenario)
         self.assertEqual(len(self.metrics.data),6) # one combined SDK export per second
