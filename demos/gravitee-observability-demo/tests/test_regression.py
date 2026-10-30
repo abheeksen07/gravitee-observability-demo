@@ -78,7 +78,7 @@ class ModelTests(unittest.TestCase):
         for r in requests:
             for stage in r.stages:
                 if stage.service in (C.REDIS,C.BACKEND):
-                    self.assertEqual(stage.status,200)
+                    self.assertIn(stage.status,(200,404) if stage.service==C.BACKEND else (200,))
                     self.assertLess(stage.end-stage.start,.05)
         baseline=[traffic.request(1500+i/300) for i in range(3000)]
         averages={route:sum(r.duration for r in baseline if r.route==route)/sum(r.route==route for r in baseline) for route in C.ROUTES}
@@ -206,7 +206,7 @@ class PipelineTests(unittest.TestCase):
         records=[x.log_record for x in self.logs.get_finished_logs()]
         for req in reqs:
             selected=[r for r in records if r.attributes.get('request_id')==req.id]
-            if req.status>=500 or req.duration>=1:
+            if req.status>=400 or req.duration>=1:
                 self.assertEqual(len(selected),len(req.stages)+2+sum(len(diagnostics.details(req,s)) for s in req.stages))
                 self.assertTrue(all(not r.trace_id and not r.span_id for r in selected))
                 self.assertEqual({r.attributes['stage.name'] for r in selected if 'stage.name' in r.attributes}, {s.name for s in req.stages}|{d.name for s in req.stages for d in diagnostics.details(req,s)})
@@ -302,7 +302,7 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual({p.attributes['direction'] for p in network},{'receive','transmit'})
         self.assertTrue(all(p.attributes['device']=='eth0' for p in network))
         for svc in C.SERVICES:
-            self.assertTrue(svc.startswith('AIAPI-'))
+            self.assertTrue(svc==C.SERVICE or svc.startswith('AIAPI-'))
 
     def test_redis_exporter_metrics_match_modeled_commands_and_stay_healthy(self):
         reqs=self.requests()

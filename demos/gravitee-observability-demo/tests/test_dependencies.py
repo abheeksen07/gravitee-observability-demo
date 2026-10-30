@@ -93,7 +93,7 @@ class DependencyTests(unittest.TestCase):
         self.assertGreater(failed,20)
 
     def test_failed_attempts_have_matching_span_log_and_population_metrics(self):
-        req=self.fault();self.assertIn(req.status,(200,201))
+        req=self.fault();self.assertIn(req.status,(200,201,404))
         self.pipeline.request(req,True);self.pipeline.tick(106,self.scenario)
         errors=[c for c in req.calls if c.status>=500]
         spans=self.spans.get_finished_spans()

@@ -110,7 +110,10 @@ class Traffic:
         budget = deadline-redis-processing-backend-encoding
         error = queue_demand >= budget
         queue = deadline-redis-processing-rejection if error else queue_demand
-        status = 504 if error else 201 if route.startswith('POST') else 200
+        # Bounded missing-resource background traffic, independent of CPU pressure.
+        not_found=not error and route.startswith('GET') and self.sequence%37==0
+        status = 504 if error else 404 if not_found else 201 if route.startswith('POST') else 200
+        account=C.ACCOUNTS[(self.sequence-1)%len(C.ACCOUNTS)]
         durations = [('gateway.request_queue', C.SERVICE, queue),
                      ('redis.rate_limit.check', C.REDIS, redis),
                      ('gateway.policy.evaluate', C.SERVICE, processing)]
@@ -125,15 +128,16 @@ class Traffic:
         t=start; stages=[]
         for index,(name,svc,duration) in enumerate(durations):
             end=completed_at if index==len(durations)-1 else min(completed_at,t+duration)
-            stages.append(Stage(name,svc,t,end,504 if name=='gateway.deadline_exceeded' else 200));t=end
+            stages.append(Stage(name,svc,t,end,504 if name=='gateway.deadline_exceeded' else 404 if name=='backend.http.request' and not_found else 200));t=end
         attrs = self.scenario.context(arrival_at,instance)
         delayed = completed_at-start >= 1
         attrs.update({'request_id': f'{self.scenario.id[:12]}-{self.sequence}',
+                      'account':account,
                       'http.request.method': route.split()[0], 'http.route': route.split()[1],
                       'http.response.status_code': status,
                       'business.operation': route,
-                      'business.outcome': 'failed-attempt' if error else 'delayed' if delayed else 'completed',
-                      'business.impact': 'API-dependent transaction attempt not completed; reconcile before retrying writes' if error else 'response delayed' if delayed else 'none',
+                      'business.outcome': 'failed-attempt' if error else 'not-found' if not_found else 'delayed' if delayed else 'completed',
+                      'business.impact': 'API-dependent transaction attempt not completed; reconcile before retrying writes' if error else 'requested resource not found' if not_found else 'response delayed' if delayed else 'none',
                       'cpu.limit.cores': .25 if incident else 2.,
                       'request.deadline_seconds':deadline,
                       'gateway.queue.pressure':pressure,
@@ -141,7 +145,7 @@ class Traffic:
                       'gateway.queue.wait_seconds':queue,
                       'gateway.processing_budget_seconds':budget,
                       'deadline.exceeded':error,
-                      'error.type': 'GatewayDeadlineExceeded' if error else ''})
+                      'error.type': 'GatewayDeadlineExceeded' if error else 'ResourceNotFound' if not_found else ''})
         calls=()
         if self.scenario.expanded and not error:
             from sim.dependencies import plan

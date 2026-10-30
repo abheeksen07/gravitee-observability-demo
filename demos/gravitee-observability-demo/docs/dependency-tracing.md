@@ -13,7 +13,7 @@ backend and all its descendants: a timeout cannot claim work that never ran.
 
 ```mermaid
 flowchart LR
-    Caller[Customer applications] --> Gateway[AIAPI-api-gateway]
+    Caller[Customer applications] --> Gateway[aiapi_api_gateway]
     Gateway --> Redis[AIAPI-rate-limit-redis]
     Gateway --> Backend[AIAPI-customer-backend]
     Backend --> Auth[AIAPI-auth-service]

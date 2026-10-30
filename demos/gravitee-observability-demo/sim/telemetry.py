@@ -20,7 +20,7 @@ from sim.infrastructure import variation, cpu_shares, redis_tick, REDIS_GAUGES, 
 DURATION_VIEWS=[View(instrument_name=name,aggregation=ExplicitBucketHistogramAggregation(
     [.001,.005,.01,.025,.05,.1,.25,.5,1.,2.5,5.,7.5,10.]))
     for name in ('http_server_request_duration_seconds','http_client_request_duration_seconds',
-                 'jvm_gc_pause_seconds','redis_command_duration_seconds')]
+                 'jvm_gc_pause_seconds','redis_command_duration_seconds','api_gateway_breakdown_duration_seconds')]
 
 class Telemetry:
     def __init__(self, start, metric_exporter, span_exporter, log_exporter, batch=False):
@@ -41,6 +41,8 @@ class Telemetry:
                 self.services[(svc,instance)]={'reader':reader,'tracer':tp.get_tracer('AIAPI-stream'),
                     'logger':lp.get_logger('AIAPI-stream'),'labels':service_labels(svc,instance),
                     'span':SpanMetrics(meter,svc,instance),
+                    'breakdown':counter('api_gateway_breakdown'),
+                    'breakdown_duration':hist('api_gateway_breakdown_duration_seconds'),
                     'dependency_calls':counter('aiapi_dependency_calls_total'),
                     'dependency_duration':hist('aiapi_dependency_duration_seconds'),
                     'requests':counter('http_client_requests_total' if svc==C.CLIENT else 'http_server_requests_total'), 'duration':hist('http_client_request_duration_seconds' if svc==C.CLIENT else 'http_server_request_duration_seconds'),
@@ -75,6 +77,10 @@ class Telemetry:
     def request(self, req, sampled):
         gateway=self.service(C.SERVICE,req.instance)
         client=self.service(C.CLIENT)
+        breakdown={**gateway['labels'],'account':req.attrs['account'],'status_code':str(req.status),
+                   'http_route':req.route,'latency_band':'timeout' if req.status==504 else 'slow' if req.duration>=1 else 'elevated' if req.duration>=.1 else 'fast'}
+        gateway['breakdown'].add(1,breakdown)
+        gateway['breakdown_duration'].record(req.duration,breakdown)
         for svc,inst,duration,status,name,kind in [
             (C.SERVICE,req.instance,req.duration,req.status,req.route,'SERVER'),
             (C.CLIENT,None,req.duration,req.status,req.route,'CLIENT'),
@@ -143,7 +149,7 @@ class Telemetry:
                 for span in (root,server): span.set_status(trace.Status(trace.StatusCode.ERROR,'gateway deadline exceeded'))
         if req.calls and not sampled: self.dependency_calls(req,None,False)
         # Recovered dependency faults retain logs even when their trace is unsampled.
-        if req.status>=500 or req.duration>=1 or sampled or req.attrs.get('dependency.recovered_errors',0):
+        if req.status>=400 or req.duration>=1 or sampled or req.attrs.get('dependency.recovered_errors',0):
             for i,stage in enumerate(req.stages):
                 attrs={**self.stage_attrs(req,stage),'stage.name':stage.name,'stage.duration_seconds':stage.end-stage.start,
                        'stage.status_code':stage.status,'request.duration_seconds':req.duration,

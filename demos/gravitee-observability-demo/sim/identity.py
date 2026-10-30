@@ -1,7 +1,7 @@
 from sim import config as C
 
 def service_labels(service, instance=None):
-    labels = {'demo':'AIAPI-api-platform', 'demo_build':'AIAPI-dependency-tracing-v5', 'service': service, 'service_name': service, 'lens_service': service,
+    labels = {'demo':'AIAPI-api-platform', 'demo_build':'AIAPI-account-breakdown-v6', 'service': service, 'service_name': service, 'lens_service': service,
             'application': 'AIAPI-api-platform', 'team': 'api-platform',
             'environment': 'prod-us', 'service_role': C.ROLES[service],
             'instance': instance or service + '-0', 'az': 'us-placement-unvalidated'}

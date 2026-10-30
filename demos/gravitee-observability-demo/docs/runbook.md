@@ -1,7 +1,7 @@
 # Gateway throttling investigation and recovery
 
 1. Confirm caller degradation in API error percentage, latency and synthetic
-   checks. Scope to `AIAPI-api-gateway`, `environment=prod-us` and launch release.
+   checks. Scope to `aiapi_api_gateway`, `environment=prod-us` and launch release.
 2. Inspect request queue/CFS-wait traces and detailed error/slow-request logs.
    Follow queue enqueue, CFS/runnable wait, resume and deadline-check child spans.
    Use remaining-budget and stage-duration log fields to explain long waits.

@@ -19,7 +19,7 @@ class SummarySink:
     summary=True
     def __init__(self):
         self.counts=dict(metrics=0,spans=0,logs=0,events=0)
-        self.final_metrics={};self.final_state={};self.failed_logs=0;self.active_traces={};self.timing_errors=0;self.dependency_errors=0;self.dependency_metrics={}
+        self.final_metrics={};self.final_state={};self.failed_logs=0;self.active_traces={};self.timing_errors=0;self.dependency_errors=0;self.dependency_metrics={};self.breakdown_metrics={}
     def write(self,kind,data): self.counts[kind]+=1
     def spans(self,spans):
         self.counts['spans']+=len(spans)
@@ -55,6 +55,8 @@ class SummarySink:
                         self.final_metrics[(instance,metric.name)]=sum(p.value for p in points)
                     if metric.name in ('container_spec_cpu_quota_cores','aiapi_gateway_pending_requests','aiapi_synthetic_check_success'):
                         self.final_state[(instance,metric.name)]=points[-1].value
+                    if metric.name=='api_gateway_breakdown':
+                        self.breakdown_metrics[instance]=sum(p.value for p in points)
                     if metric.name=='aiapi_dependency_calls_total':
                         self.dependency_metrics[instance]=(sum(p.value for p in points),sum(p.value for p in points if p.attributes['outcome']=='error'))
                     if metric.name=='traces_span_metrics_duration': native=sum(p.count for p in points)
@@ -64,12 +66,13 @@ class SummarySink:
         requests=sum(v for (instance,name),v in self.final_metrics.items() if instance.startswith(C.SERVICE+'-') and name=='http_server_requests_total')
         failures=sum(v for (instance,name),v in self.final_metrics.items() if name=='aiapi_failed_request_attempts_total')
         assert requests==totals['requests'], (requests,totals)
+        assert sum(self.breakdown_metrics.values())==requests
         assert failures==totals['failed_attempts']==self.failed_logs
         assert sum(v[0] for v in self.dependency_metrics.values())==totals['dependency_calls']
         assert sum(v[1] for v in self.dependency_metrics.values())==totals['dependency_errors']==self.dependency_errors
         assert self.timing_errors==0 and not self.active_traces, self.timing_errors
         return {'full_population_requests':requests,'failed_attempt_metrics_and_detailed_logs':failures,
-                'dependency_counts_errors_and_logs':'passed','trace_parent_timing':'passed','native_classic_population':'passed'}
+                'account_status_breakdown':'passed','dependency_counts_errors_and_logs':'passed','trace_parent_timing':'passed','native_classic_population':'passed'}
     def close(self): pass
 
 def run(duration=None, fast=False, path=None, live=False, seed=7):

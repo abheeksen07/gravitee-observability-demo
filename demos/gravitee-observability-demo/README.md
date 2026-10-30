@@ -18,7 +18,7 @@ region, workload placement and deployment mechanism require validation.
 
 | Canonical service name | Role and modeled location |
 | --- | --- |
-| `AIAPI-api-gateway` | Java API Gateway; two stable AKS instances in US production |
+| `aiapi_api_gateway` | Java API Gateway; two stable AKS instances in US production |
 | `AIAPI-customer-applications` | Logical external callers; hosting unspecified |
 | `AIAPI-customer-backend` | Healthy API backend; hosting unspecified |
 | `AIAPI-rate-limit-redis` | Self-hosted Redis in illustrative AKS placement; healthy rate-limit checks |
@@ -362,3 +362,10 @@ Expanded tracing is enabled by default. See [the topology, error windows and
 lens queries](docs/dependency-tracing.md). Six application dependencies and nested
 MongoDB/Kafka/SES calls replace the earlier shallow backend-only tree.
 Use `AIAPI_EXPANDED_TRACING=false` to retain the CPU-only workflow.
+
+## Customer account and status breakdown
+
+The gateway now emits `api_gateway_breakdown` and
+`api_gateway_breakdown_duration_seconds` for 12 generated accounts, status codes
+200/201/404/504, route and latency band. [Metric semantics and queries](docs/api-gateway-breakdown.md)
+explain the background 404s separately from CPU-driven 504s.

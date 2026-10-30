@@ -3,7 +3,7 @@
 This guide describes emitted data; it changes no tenant configuration. Configure
 a view/discovery rule for `application="AIAPI-api-platform"`, grouping by
 `lens_service`, with `instance` for the instance selector. Use
-`AIAPI-api-gateway` as `$service`. All seventeen services emit `demo_service_info`;
+`aiapi_api_gateway` as `$service`. All seventeen services emit `demo_service_info`;
 expanded tracing models six application dependencies plus MongoDB, Kafka and SES
 calls. Other unmodeled managed dependencies remain discovery-only.
 
@@ -11,7 +11,7 @@ Stable labels: `demo="AIAPI-api-platform"`, `demo_build="AIAPI-infrastructure-v4
 `application`, `team`, `environment="prod-us"`, `instance`, and
 `az="us-placement-unvalidated"`. The last is an explicit unvalidated grouping
 value, not a claim about an Azure zone. Gateway instances are
-`AIAPI-api-gateway-0` and `AIAPI-api-gateway-1`; release/version labels vary
+`aiapi_api_gateway-0` and `aiapi_api_gateway-1`; release/version labels vary
 without changing instance identities. Request/trace IDs never appear on metrics.
 
 ```promql
@@ -83,11 +83,11 @@ expanded backend and Redis calls use paired CLIENT/SERVER spans. See
 caller-side managed-dependency spans.
 
 ```promql
-sum(rate(http_server_requests_total{lens_service="AIAPI-api-gateway"}[30s]))
-100 * sum(rate(http_server_requests_total{lens_service="AIAPI-api-gateway",http_response_status_code=~"5.."}[30s]))
- / sum(rate(http_server_requests_total{lens_service="AIAPI-api-gateway"}[30s]))
+sum(rate(http_server_requests_total{lens_service="aiapi_api_gateway"}[30s]))
+100 * sum(rate(http_server_requests_total{lens_service="aiapi_api_gateway",http_response_status_code=~"5.."}[30s]))
+ / sum(rate(http_server_requests_total{lens_service="aiapi_api_gateway"}[30s]))
 histogram_quantile(0.95, sum by (le) (
- rate(http_server_request_duration_seconds_bucket{lens_service="AIAPI-api-gateway"}[30s])
+ rate(http_server_request_duration_seconds_bucket{lens_service="aiapi_api_gateway"}[30s])
 ))
 ```
 
@@ -125,17 +125,17 @@ HTTP counters remain the authoritative full-population attempt/error counts.
 
 ```promql
 # Limit drops to 0.25 while node capacity remains available.
-container_spec_cpu_quota_cores{lens_service="AIAPI-api-gateway"}
-100 * rate(container_cpu_cfs_throttled_periods_total{lens_service="AIAPI-api-gateway"}[30s])
- / rate(container_cpu_cfs_periods_total{lens_service="AIAPI-api-gateway"}[30s])
-rate(container_cpu_cfs_throttled_seconds_total{lens_service="AIAPI-api-gateway"}[30s])
-aiapi_gateway_pending_requests{lens_service="AIAPI-api-gateway"}
-aiapi_node_cpu_available_cores{lens_service="AIAPI-api-gateway"}
-kube_pod_status_ready{lens_service="AIAPI-api-gateway"}
+container_spec_cpu_quota_cores{lens_service="aiapi_api_gateway"}
+100 * rate(container_cpu_cfs_throttled_periods_total{lens_service="aiapi_api_gateway"}[30s])
+ / rate(container_cpu_cfs_periods_total{lens_service="aiapi_api_gateway"}[30s])
+rate(container_cpu_cfs_throttled_seconds_total{lens_service="aiapi_api_gateway"}[30s])
+aiapi_gateway_pending_requests{lens_service="aiapi_api_gateway"}
+aiapi_node_cpu_available_cores{lens_service="aiapi_api_gateway"}
+kube_pod_status_ready{lens_service="aiapi_api_gateway"}
 aiapi_backend_probe_success
 histogram_quantile(0.95, sum by (le) (rate(redis_command_duration_seconds_bucket[30s])))
 histogram_quantile(0.95, sum by (le) (rate(jvm_gc_pause_seconds_bucket[30s])))
-aiapi_synthetic_check_success{lens_service="AIAPI-api-gateway"}
+aiapi_synthetic_check_success{lens_service="aiapi_api_gateway"}
 sum(increase(aiapi_failed_request_attempts_total[20m]))
 ```
 
@@ -230,16 +230,16 @@ request IDs, release IDs and timestamps are not added to infrastructure labels.
 ```promql
 # Eight lines: two gateway pods x four CPU scheduling series. Unit: cores.
 sum by (pod, node, cpu) (
-  rate(container_cpu_usage_seconds_total{lens_service="AIAPI-api-gateway"}[10s])
+  rate(container_cpu_usage_seconds_total{lens_service="aiapi_api_gateway"}[10s])
 )
 # Node utilization per CPU, percent. 16 lines, not summed per pod.
 100 * (1 - rate(node_cpu_seconds_total{application="AIAPI-api-platform",mode="idle"}[10s]))
 # Four lines: pod x network direction. Unit: bytes/s.
 sum by (pod, node, direction) (
-  rate(system_network_io_bytes_total{lens_service="AIAPI-api-gateway"}[10s])
+  rate(system_network_io_bytes_total{lens_service="aiapi_api_gateway"}[10s])
 )
 # Two pod memory lines; retain pod instead of reducing everything to one value.
-process_resident_memory_bytes{lens_service="AIAPI-api-gateway"}
+process_resident_memory_bytes{lens_service="aiapi_api_gateway"}
 ```
 
 Use a stacked area chart for per-CPU consumption, separate charts for node CPU
@@ -252,7 +252,7 @@ See [Redis lens presentation](redis-lens.md) for exporter research and queries.
 ### Migrating the existing lens
 
 New service identities use the uppercase `AIAPI-` prefix, including
-`AIAPI-api-gateway` and `AIAPI-rate-limit-redis`; application is
+`aiapi_api_gateway` and `AIAPI-rate-limit-redis`; application is
 `AIAPI-api-platform`, and custom metrics use the conventional lowercase
 `aiapi_` prefix. Update service discovery selectors, lens titles, monitors,
 dashboard queries and catalog descriptions in the destination tenant to match.
@@ -265,3 +265,6 @@ The repository URL and checkout directory keep their actual GitHub names.
 Current build: `AIAPI-dependency-tracing-v5`. The v4 infrastructure dimensions
 and jitter remain. [Dependency tracing](dependency-tracing.md) adds the nested
 map, explicit recovered error windows, separate sampling budget and edge queries.
+
+For customer segmentation, see [gateway account/status breakdown](api-gateway-breakdown.md):
+12 fixed accounts with completed-request counts and matched latency histograms.

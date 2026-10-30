@@ -1,6 +1,6 @@
 """Generated AIAPI scenario; placement is illustrative, not discovered."""
 import os
-SERVICE = 'AIAPI-api-gateway'
+SERVICE = 'aiapi_api_gateway'
 CLIENT = 'AIAPI-customer-applications'
 BACKEND = 'AIAPI-customer-backend'
 REDIS = 'AIAPI-rate-limit-redis'
@@ -36,3 +36,6 @@ ROUTES = ('GET /catalog/v1/products/{id}', 'POST /orders/v1/submissions', 'GET /
 PROFILES = ('API product routing release with bundled gateway resource settings', 'Partner API policy release with bundled gateway resource settings', 'Order submission routing release with bundled gateway resource settings')
 SOURCE_REPOSITORY = 'https://github.com/abheeksen07/gravitee-observability-demo'
 SOURCE_REFERENCE = os.getenv('AIAPI_SOURCE_REF', os.getenv('GRAVITEE_SOURCE_REF', 'work'))
+
+# Fixed generated account identifiers; no real customer identities.
+ACCOUNTS = tuple(f'account-{i:03d}' for i in range(1,13))
